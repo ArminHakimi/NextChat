@@ -1,10 +1,25 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Link from "next/link";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import "./layout.css";
 
 export const metadata: Metadata = {
   title: "NextChat",
-  description: "A simple Next.js chat app with live WebSocket messaging",
+  description: "simple chat app",
+  applicationName: "NextChat",
+  appleWebApp: {
+    capable: true,
+    title: "NextChat",
+    statusBarStyle: "default",
+  },
+  icons: {
+    icon: [{ url: "/pwa-icons/192", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/pwa-icons/180", sizes: "180x180", type: "image/png" }],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#7a2830",
 };
 
 export default function RootLayout({
@@ -15,6 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body suppressHydrationWarning>
+        <ServiceWorkerRegister />
         <nav className="navbar">
           <div className="nav-container">
             <h1 className="logo">NextChat</h1>

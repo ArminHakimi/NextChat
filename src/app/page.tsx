@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { io, Socket } from "socket.io-client";
+import CallPanel from "@/components/CallPanel";
+import { useRoomCall } from "@/lib/useRoomCall";
 import "./page.css";
 
 interface ChatMessage {
@@ -28,11 +30,14 @@ export default function Home() {
   const [activeRoom, setActiveRoom] = useState<ChatRoom | null>(null);
   const [serverNotice, setServerNotice] = useState("");
   const [isConnected, setIsConnected] = useState(false);
+  const [socketInstance, setSocketInstance] = useState<Socket | null>(null);
+  const call = useRoomCall(socketInstance, activeRoom?.id ?? null);
 
   useEffect(() => {
     socket = io({
       transports: ["websocket"],
     });
+    setSocketInstance(socket);
 
     socket.on("connect", () => {
       setIsConnected(true);
@@ -66,6 +71,7 @@ export default function Home() {
     return () => {
       socket?.disconnect();
       socket = null;
+      setSocketInstance(null);
     };
   }, []);
 
@@ -145,7 +151,7 @@ export default function Home() {
         <div>
           <span className="hero-kicker">NextChat</span>
           <h1>
-            Simple realtime chat built with Next.js and WebSocket transport.
+            Simple realtime chat.
           </h1>
           <p className="hero-copy">
             Join the room, set a name, and send messages that broadcast to every
@@ -229,12 +235,81 @@ export default function Home() {
               <h2>{activeRoom?.name ?? "Lobby"}</h2>
               <p>Messages are scoped to your selected group.</p>
             </div>
-            {lastMessage && (
-              <span className="message-meta">
-                Last event at {formatTime(lastMessage.timestamp)}
-              </span>
-            )}
+            <div className="transcript-actions">
+              {lastMessage && (
+                <span className="message-meta">
+                  Last event at {formatTime(lastMessage.timestamp)}
+                </span>
+              )}
+              {call.status === "idle" && (
+                <button
+                  className="button call-start"
+                  type="button"
+                  onClick={() => void call.join()}
+                  disabled={!isConnected}
+                >
+                  {call.roomCallCount > 0
+                    ? `Join call (${call.roomCallCount})`
+                    : "Start call"}
+                </button>
+              )}
+              {call.status === "joining" && (
+                <span className="message-meta">Connecting call…</span>
+              )}
+            </div>
           </div>
+
+          {call.incomingRing && call.status === "idle" && (
+            <div className="call-ring" role="alert">
+              <span>
+                <strong>{call.incomingRing.user}</strong> started a call in{" "}
+                {call.incomingRing.roomName}.
+              </span>
+              <div className="call-ring-actions">
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => void call.join()}
+                >
+                  Join
+                </button>
+                <button
+                  className="call-control"
+                  type="button"
+                  onClick={call.dismissRing}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {call.error && (
+            <p className="notice-text" role="alert">
+              {call.error}{" "}
+              <button
+                className="link-button"
+                type="button"
+                onClick={call.clearError}
+              >
+                Dismiss
+              </button>
+            </p>
+          )}
+
+          {call.status === "in-call" && (
+            <CallPanel
+              displayName={displayName}
+              localStream={call.localStream}
+              peers={call.peers}
+              audioEnabled={call.audioEnabled}
+              videoEnabled={call.videoEnabled}
+              hasCamera={call.hasCamera}
+              onToggleMic={call.toggleMic}
+              onToggleCamera={call.toggleCamera}
+              onLeave={call.leave}
+            />
+          )}
 
           <div className="message-list">
             {messages.map((entry) => {
