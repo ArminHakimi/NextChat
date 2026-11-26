@@ -2,140 +2,28 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
+import {
+  FALLBACK_ICE_SERVERS,
+  fetchIceServers,
+  getLocalMedia,
+  playRingtone,
+  requestNotificationPermission,
+  showRingNotification,
+} from "@/lib/roomCallMedia";
+import {
+  createPeerLink,
+  processSignal,
+  type PeerLink,
+} from "@/lib/roomCallSignaling";
+import type {
+  CallPeer,
+  CallStatus,
+  IncomingRing,
+  ParticipantInfo,
+  SignalData,
+} from "@/lib/roomCallTypes";
 
-export interface CallPeer {
-  id: string;
-  user: string;
-  audio: boolean;
-  video: boolean;
-  stream: MediaStream | null;
-}
-
-export interface IncomingRing {
-  roomId: string;
-  roomName: string;
-  user: string;
-}
-
-export type CallStatus = "idle" | "joining" | "in-call";
-
-interface ParticipantInfo {
-  id: string;
-  user: string;
-  audio: boolean;
-  video: boolean;
-}
-
-interface SignalData {
-  description?: RTCSessionDescriptionInit;
-  candidate?: RTCIceCandidateInit;
-}
-
-interface PeerLink {
-  pc: RTCPeerConnection;
-  polite: boolean;
-  makingOffer: boolean;
-  ignoreOffer: boolean;
-  queue: Promise<void>;
-}
-
-const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
-];
-
-const getLocalMedia = async (): Promise<MediaStream> => {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error(
-      "Calls need a secure connection (HTTPS or localhost) and a browser with camera/mic support.",
-    );
-  }
-
-  try {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: true,
-    });
-  } catch {
-    // No camera (or camera denied): fall back to a voice-only call.
-    return navigator.mediaDevices.getUserMedia({ audio: true });
-  }
-};
-
-const fetchIceServers = async (): Promise<RTCIceServer[]> => {
-  try {
-    const response = await fetch("/api/ice", { cache: "no-store" });
-    const body = (await response.json()) as { iceServers?: RTCIceServer[] };
-    return body.iceServers?.length ? body.iceServers : FALLBACK_ICE_SERVERS;
-  } catch {
-    return FALLBACK_ICE_SERVERS;
-  }
-};
-
-const playRingtone = (): void => {
-  try {
-    const context = new AudioContext();
-    void context.resume();
-    const start = context.currentTime;
-
-    [0, 0.35, 1.2, 1.55].forEach((offset, index) => {
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      const at = start + offset;
-
-      oscillator.frequency.value = index % 2 === 0 ? 880 : 660;
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(0.2, at + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.3);
-      oscillator.connect(gain).connect(context.destination);
-      oscillator.start(at);
-      oscillator.stop(at + 0.32);
-    });
-
-    window.setTimeout(() => void context.close(), 2500);
-  } catch {
-    // Audio may be blocked until the user interacts with the page.
-  }
-};
-
-const requestNotificationPermission = (): void => {
-  if ("Notification" in window && Notification.permission === "default") {
-    void Notification.requestPermission();
-  }
-};
-
-const showRingNotification = async (ring: IncomingRing): Promise<void> => {
-  if (
-    !document.hidden ||
-    !("Notification" in window) ||
-    Notification.permission !== "granted"
-  ) {
-    return;
-  }
-
-  const title = `${ring.user} started a call`;
-  const options: NotificationOptions = {
-    body: `Join the call in ${ring.roomName}.`,
-    tag: `call-${ring.roomId}`,
-    icon: "/pwa-icons/192",
-  };
-
-  try {
-    const registration = await navigator.serviceWorker?.getRegistration();
-
-    if (registration) {
-      await registration.showNotification(title, options);
-      return;
-    }
-  } catch {
-    // Fall back to a page-level notification below.
-  }
-
-  const notification = new Notification(title, options);
-  notification.onclick = () => {
-    window.focus();
-    notification.close();
-  };
-};
+export type { CallPeer, CallStatus, IncomingRing } from "@/lib/roomCallTypes";
 
 export function useRoomCall(socket: Socket | null, roomId: string | null) {
   const [status, setStatusState] = useState<CallStatus>("idle");
@@ -206,10 +94,6 @@ export function useRoomCall(socket: Socket | null, roomId: string | null) {
       return;
     }
 
-    const sendSignal = (to: string, data: SignalData) => {
-      socket.emit("call:signal", { to, data });
-    };
-
     const getLink = (peerId: string): PeerLink => {
       const existing = linksRef.current.get(peerId);
 
@@ -217,87 +101,16 @@ export function useRoomCall(socket: Socket | null, roomId: string | null) {
         return existing;
       }
 
-      const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
-      const link: PeerLink = {
-        pc,
-        // Deterministic roles for "perfect negotiation": exactly one side yields on glare.
-        polite: (socket.id ?? "") > peerId,
-        makingOffer: false,
-        ignoreOffer: false,
-        queue: Promise.resolve(),
-      };
+      const link = createPeerLink({
+        socket,
+        peerId,
+        iceServers: iceServersRef.current,
+        localStream: localStreamRef.current,
+        upsertPeer,
+      });
 
       linksRef.current.set(peerId, link);
-
-      const stream = localStreamRef.current;
-      stream?.getTracks().forEach((track) => pc.addTrack(track, stream));
-
-      pc.onnegotiationneeded = async () => {
-        try {
-          link.makingOffer = true;
-          await pc.setLocalDescription();
-
-          if (pc.localDescription) {
-            sendSignal(peerId, { description: pc.localDescription.toJSON() });
-          }
-        } catch (negotiationError) {
-          console.error("Call negotiation failed:", negotiationError);
-        } finally {
-          link.makingOffer = false;
-        }
-      };
-
-      pc.onicecandidate = ({ candidate }) => {
-        if (candidate) {
-          sendSignal(peerId, { candidate: candidate.toJSON() });
-        }
-      };
-
-      pc.ontrack = ({ track, streams }) => {
-        upsertPeer(peerId, { stream: streams[0] ?? new MediaStream([track]) });
-      };
-
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "failed") {
-          pc.restartIce();
-        }
-      };
-
       return link;
-    };
-
-    const processSignal = async (link: PeerLink, peerId: string, data: SignalData) => {
-      const { pc } = link;
-
-      if (data.description) {
-        const offerCollision =
-          data.description.type === "offer" &&
-          (link.makingOffer || pc.signalingState !== "stable");
-
-        link.ignoreOffer = !link.polite && offerCollision;
-
-        if (link.ignoreOffer) {
-          return;
-        }
-
-        await pc.setRemoteDescription(data.description);
-
-        if (data.description.type === "offer") {
-          await pc.setLocalDescription();
-
-          if (pc.localDescription) {
-            sendSignal(peerId, { description: pc.localDescription.toJSON() });
-          }
-        }
-      } else if (data.candidate) {
-        try {
-          await pc.addIceCandidate(data.candidate);
-        } catch (candidateError) {
-          if (!link.ignoreOffer) {
-            throw candidateError;
-          }
-        }
-      }
     };
 
     const onSignal = ({ from, data }: { from: string; data: SignalData }) => {
@@ -309,7 +122,7 @@ export function useRoomCall(socket: Socket | null, roomId: string | null) {
 
       // Serialize per peer so ICE candidates never race ahead of their description.
       link.queue = link.queue
-        .then(() => processSignal(link, from, data))
+        .then(() => processSignal(socket, link, from, data))
         .catch((signalError) => console.error("Call signal failed:", signalError));
     };
 
