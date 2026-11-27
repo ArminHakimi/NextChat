@@ -38,6 +38,13 @@ export default function RootLayout({
               <li>
                 <Link href="/">Chat</Link>
               </li>
+              <li>
+                <form action="/api/auth/logout" method="post">
+                  <button className="nav-logout" type="submit">
+                    Log out
+                  </button>
+                </form>
+              </li>
             </ul>
           </div>
         </nav>

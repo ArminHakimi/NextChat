@@ -1,12 +1,8 @@
-const CACHE_NAME = "nextchat-v1";
-const OFFLINE_URLS = ["/", "/manifest.webmanifest"];
+const CACHE_NAME = "nextchat-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) => cache.addAll(OFFLINE_URLS))
-      .then(() => self.skipWaiting()),
+    self.skipWaiting(),
   );
 });
 
@@ -60,30 +56,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Pages and everything else: network-first, falling back to cache when offline.
-  event.respondWith(
-    fetch(request)
-      .then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-        }
-        return response;
-      })
-      .catch(async () => {
-        const cached = await caches.match(request);
-        if (cached) {
-          return cached;
-        }
-        if (request.mode === "navigate") {
-          const fallback = await caches.match("/");
-          if (fallback) {
-            return fallback;
-          }
-        }
-        return Response.error();
-      }),
-  );
+  // Never cache HTML pages: they may contain private, authenticated content.
 });
 
 self.addEventListener("notificationclick", (event) => {

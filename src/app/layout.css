@@ -70,6 +70,20 @@ body {
   opacity: 0.8;
 }
 
+.nav-logout {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: white;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.nav-logout:hover {
+  opacity: 0.8;
+}
+
 .main-content {
   max-width: 1200px;
   margin: 0 auto;

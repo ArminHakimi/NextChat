@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import next from "next";
 import { Server } from "socket.io";
+import { hasValidSession, isAuthRequired } from "./src/lib/auth";
 
 type RoomId = string;
 
@@ -269,6 +270,33 @@ app.prepare().then(() => {
     cors: {
       origin: "*",
     },
+  });
+
+  io.use((socket, nextSocket) => {
+    const origin = socket.handshake.headers.origin;
+    const host = socket.handshake.headers.host;
+
+    if (origin) {
+      try {
+        if (new URL(origin).host !== host) {
+          nextSocket(new Error("Origin not allowed."));
+          return;
+        }
+      } catch {
+        nextSocket(new Error("Origin not allowed."));
+        return;
+      }
+    }
+
+    if (
+      isAuthRequired() &&
+      !hasValidSession(socket.handshake.headers.cookie)
+    ) {
+      nextSocket(new Error("Authentication required."));
+      return;
+    }
+
+    nextSocket();
   });
 
   io.on("connection", (socket) => {
